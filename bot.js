@@ -4,12 +4,10 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const collectBlock = require('mineflayer-collectblock').plugin
 const toolPlugin = require('mineflayer-tool').plugin
-const { Rcon } = require('rcon-client')
 const { Vec3 } = require('vec3')
 
 /* ───────── CONFIG ───────── */
 
-const TELEPORT_DISTANCE = 20
 const FOLLOW_DISTANCE = 3
 
 const BOT_CONFIG = {
@@ -20,18 +18,10 @@ const BOT_CONFIG = {
   version: process.env.MC_VERSION
 }
 
-const RCON_CONFIG = {
-  host: process.env.RCON_HOST,
-  port: Number(process.env.RCON_PORT),
-  password: process.env.RCON_PASSWORD
-}
-
 /* ───────────────────────── */
 
 let bot
-let rcon
 
-let home = null
 let followTarget = null
 
 let farmingEnabled = true
@@ -62,13 +52,6 @@ function humanPlayerCount () {
   return Object.values(bot.players).filter(p =>
     p.username !== bot.username && p.entity
   ).length
-}
-
-/* ───────── RCON ───────── */
-
-async function initRcon () {
-  rcon = await Rcon.connect(RCON_CONFIG)
-  console.log('[RCON] Connected')
 }
 
 /* ───────── FARM LOGIC ───────── */
@@ -105,8 +88,9 @@ async function farmLoop () {
 
   while (farmingEnabled) {
     try {
+      // Don’t farm while following someone
       if (followTarget) {
-        await sleep(5000)
+        await sleep(2000)
         continue
       }
 
@@ -125,9 +109,7 @@ async function farmLoop () {
         const crop = bot.blockAt(pos)
         if (!crop) continue
 
-        await bot.pathfinder.goto(
-          new goals.GoalBlock(pos.x, pos.y, pos.z)
-        )
+        await bot.pathfinder.goto(new goals.GoalBlock(pos.x, pos.y, pos.z))
 
         await bot.tool.equipForBlock(crop)
         await bot.dig(crop)
@@ -144,7 +126,7 @@ async function farmLoop () {
           await bot.placeBlock(soil, new Vec3(0, 1, 0))
         }
 
-        await sleep(300)
+        await sleep(250)
       }
 
       await dumpToChest()
@@ -152,7 +134,7 @@ async function farmLoop () {
       console.error('[FARM]', err.message)
     }
 
-    await sleep(5000)
+    await sleep(4000)
   }
 
   farmLoopRunning = false
@@ -164,22 +146,18 @@ async function followLoop () {
   if (!followTarget?.entity) return
 
   try {
-    const botPos = bot.entity.position
     const targetPos = followTarget.entity.position
 
-    if (botPos.distanceTo(targetPos) > TELEPORT_DISTANCE) {
-      await rcon.send(`tp ${bot.username} ${followTarget.username}`)
-    } else {
-      bot.pathfinder.setGoal(
-        new goals.GoalNear(
-          targetPos.x,
-          targetPos.y,
-          targetPos.z,
-          FOLLOW_DISTANCE
-        ),
-        true
-      )
-    }
+    // Just walk near the player (no teleport / no OP needed)
+    bot.pathfinder.setGoal(
+      new goals.GoalNear(
+        targetPos.x,
+        targetPos.y,
+        targetPos.z,
+        FOLLOW_DISTANCE
+      ),
+      true
+    )
   } catch (err) {
     console.error('[FOLLOW]', err.message)
   }
@@ -221,6 +199,7 @@ function registerHandlers () {
   bot.once('spawn', async () => {
     emptySince = null
     reconnectInterval && clearInterval(reconnectInterval)
+    reconnectInterval = null
 
     const mcData = require('minecraft-data')(bot.version)
     const movements = new Movements(bot, mcData)
@@ -229,7 +208,6 @@ function registerHandlers () {
 
     bot.pathfinder.setMovements(movements)
 
-    await initRcon()
     bot.chat('Bot online.')
     farmLoop()
   })
@@ -248,10 +226,6 @@ function registerHandlers () {
     if (message === 'stop') {
       followTarget = null
       bot.pathfinder.setGoal(null)
-    }
-
-    if (message === 'tpme') {
-      await rcon.send(`tp ${bot.username} ${username}`)
     }
   })
 
